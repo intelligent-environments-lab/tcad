@@ -18,7 +18,7 @@ If you're regenerating the parquet files, you will have to extract the downloade
 
 ## Installation
 
-Clone this repository and use `pip install .` on the root folder.
+Clone this repository and use `pip install -e .` on the root folder.
 
 ## Usage
 
