@@ -1,36 +1,47 @@
 # This file is named tparser because 'parser' is already a part of the standard python library.
-import pandas as pd
-
 from io import BytesIO
 import zipfile,requests
-import os
 from pathlib import Path
 
-layout_url = 'https://traviscad.org/wp-content/largefiles/Legacy8.0.25-Export-Layouts-07242023.zip'
-layout_file = '.cache/Legacy8.0.25-Appraisal Export Layout07242023.xlsx'
+import pandas as pd
 
-tcad_dir = '.cache/2023_Certified_Appraisal_Export_Supp_0_07232022'
-def download_layout():
-    data = requests.get(layout_url).content
-    zipfile.ZipFile(BytesIO(data)).extract('Legacy8.0.25-Appraisal Export Layout07242023.xlsx',path='.cache')
+LAYOUT_URL = 'https://traviscad.org/wp-content/largefiles/Legacy8.0.25-Export-Layouts-07242023.zip'
+LAYOUT_FILE = 'Legacy8.0.25-Appraisal Export Layout07242023.xlsx'
+
+TCAD_DIR = 'data/raw/2023_Certified_Appraisal_Export_Supp_0_07232022'
+
+def get_layout(url=LAYOUT_URL,*,skiprows=None,nrows=None,cache_dir='cache',filename=LAYOUT_FILE):
+    """ Loads or downloads the layout excel file """
+    if not Path(f'{cache_dir}/{filename}').exists():
+        data = requests.get(url).content
+        zipfile.ZipFile(BytesIO(data)).extract(filename,path=cache_dir)
+    return pd.read_excel(f'{cache_dir}/{filename}',skiprows=skiprows,nrows=nrows).drop(columns=['Unnamed: 6'])
+
+def _to_parquet(df,export_filepath):
+    """ Convenience function """
+    dir, filename = export_filepath.rsplit('/',maxsplit=1) 
+    Path(dir).mkdir(parents=True,exist_ok=True)
+    df.to_parquet(f'{dir}/{filename}')
 
 def load_improvement_info_layout():
-    imp_info_layout = pd.read_excel('data/raw/Legacy8.0.25-Appraisal Export Layout07242023.xlsx',skiprows=875,nrows=12).drop(columns=['Unnamed: 6'])
+    """ Loads in header info and metadata for improvement info file."""
+    imp_info_layout = get_layout(skiprows=875,nrows=12)
     imp_info_layout['col_spec'] = imp_info_layout.apply(lambda row:(row['Start']-1,row['End']),axis=1)
     return imp_info_layout
 
-def parse_improvement_info(optimize=True,export=False):
+def parse_improvement_info(input_file=f'{TCAD_DIR}/IMP_INFO.TXT',*,export_file=None,optimize=True):
+    """ Load and parse improvement info data. """
     imp_info_layout = load_improvement_info_layout()
-    imp_info_df = pd.read_fwf(f'{tcad_dir}/IMP_INFO.TXT',names=imp_info_layout['Field Name'].tolist(),header=None,colspecs=imp_info_layout['col_spec'].tolist())
+    imp_info_df = pd.read_fwf(input_file,names=imp_info_layout['Field Name'].tolist(),header=None,colspecs=imp_info_layout['col_spec'].tolist())
     if optimize:
         imp_info_df = optimize_memory(imp_info_df)
-    if export:
-        Path('data/processed/TCAD/').mkdir(parents=True,exist_ok=True)
-        imp_info_df.to_parquet('data/processed/TCAD/IMP_INFO.parquet')
+    if export_file:
+        _to_parquet(imp_info_df,export_file)
     return imp_info_df
 
-def parse_improvement_details(export=False):
-    imp_det_df = pd.read_fwf(f'{tcad_dir}/IMP_DET.TXT',widths=[12,4,12,12,10,25,10,4,4,15,14],header=None,
+def parse_improvement_details(input_file=f'{TCAD_DIR}/IMP_DET.TXT',*,export_file=None):
+    """ Load and parse improvement details data. """
+    imp_det_df = pd.read_fwf(input_file,widths=[12,4,12,12,10,25,10,4,4,15,14],header=None,
             names=['prop_id','prop_val_yr','imprv_id','imprv_det_id','Imprv_det_type_cd',
                    'Imprv_det_type_desc','Imprv_det_class_cd','yr_built','depreciation_yr',
                    'imprv_det_area','imprv_det_val'],dtype={'prop_id':'UInt32','prop_val_yr':'UInt16','imprv_id':'UInt32','imprv_det_id':'UInt32','Imprv_det_type_cd':'category',
@@ -38,31 +49,28 @@ def parse_improvement_details(export=False):
                    'imprv_det_area':'Float32'})
     imp_det_df['imprv_det_area'] = imp_det_df['imprv_det_area'].astype("UInt32")
     imp_det_df['imprv_det_val'] = pd.to_numeric(imp_det_df['imprv_det_val'],errors='coerce').astype('UInt32')
-    if export:
-        Path('data/processed/TCAD/').mkdir(parents=True,exist_ok=True)
-        imp_det_df.to_parquet('data/processed/TCAD/IMP_DET.parquet')
+    if export_file:
+        _to_parquet(imp_det_df,export_file)
     return imp_det_df
 
 def load_improvement_features_layout():
-    # imp_info_layout = load_improvement_info_layout()
-    imp_atr_layout = pd.read_excel('data/raw/Legacy8.0.25-Appraisal Export Layout07242023.xlsx',skiprows=926,nrows=8).drop(columns=['Unnamed: 6'])
+    imp_atr_layout = get_layout(skiprows=926,nrows=8)
     imp_atr_layout['col_spec'] = imp_atr_layout.apply(lambda row:(row['Start']-1,row['End']),axis=1)
     imp_atr_layout['dtype']=imp_atr_layout.apply(lambda row:select_type(row),axis=1)
     return imp_atr_layout
 
-def parse_improvement_features(optimize=True,export=False):
+def parse_improvement_features(input_file=f'{TCAD_DIR}/IMP_ATR.TXT',*,export_file=None,optimize=True):
     imp_atr_layout = load_improvement_features_layout()
-    imp_atr_df = pd.read_fwf(f'{tcad_dir}/IMP_ATR.TXT',names=imp_atr_layout['Field Name'].tolist(),header=None,colspecs=imp_atr_layout['col_spec'].tolist())
+    imp_atr_df = pd.read_fwf(input_file,names=imp_atr_layout['Field Name'].tolist(),header=None,colspecs=imp_atr_layout['col_spec'].tolist())
     if optimize:
         imp_atr_df = optimize_memory(imp_atr_df)
-
-    if export:
-        Path('data/processed/TCAD/').mkdir(parents=True,exist_ok=True)
-        imp_atr_df.to_parquet('data/processed/TCAD/IMP_ATR.parquet')
+    if export_file:
+        _to_parquet(imp_atr_df,export_file)
     return imp_atr_df
 
 def load_property_layout(filter=True):
-    prop_layout = pd.read_excel('data/raw/Legacy8.0.25-Appraisal Export Layout07242023.xlsx',skiprows=54,nrows=436).drop(columns=['Unnamed: 6'])
+    """Retrieve header information for property file"""
+    prop_layout = get_layout(skiprows=54,nrows=436)
     prop_layout['col_spec'] = prop_layout.apply(lambda row:(row['Start']-1,row['End']),axis=1)
     prop_layout = prop_layout.loc[~prop_layout['Field Name'].isin(['filler','mineral_lease_name','mineral_lease_operator'])]
     prop_layout['dtype'] = prop_layout.apply(lambda row:select_type(row),axis=1)
@@ -70,17 +78,19 @@ def load_property_layout(filter=True):
         return prop_layout[~prop_layout['Field Name'].str.contains('sup_|flag|mineral|ag_|rendition_|timber_|_agent_|py_|jan1_|appr_|ex_|mortgage_|(?<!co|en|so|pc)_exempt|qualify_yr|_prorate',regex=True)].reset_index(drop=True)
     return prop_layout
 
-def parse_property_details(optimize=True,filter=True,export=False):
+def parse_property_details(input_file=f'{TCAD_DIR}/PROP.TXT',*,export_file=None,optimize=True,filter=True):
     property_layout = load_property_layout(filter=filter)
-    prop_df = pd.read_fwf(f'{tcad_dir}/PROP.TXT',names=property_layout['Field Name'].tolist(),
+    prop_df = pd.read_fwf(input_file,names=property_layout['Field Name'].tolist(),
                       colspecs=property_layout['col_spec'].tolist(),header=None)
     if optimize:
         prop_df = optimize_memory(prop_df)
-    if export:
-        prop_df.to_parquet('data/processed/TCAD/PROP.parquet')
+    if export_file:
+        _to_parquet(prop_df,export_file)
+        # prop_df.to_parquet(export_file)
     return prop_df
 
 def optimize_memory(df):
+    """ Downcasting numeric variables to save memory"""
     df = df.copy()
 
     # Fix numeric columns that have hyphens in their values
@@ -133,5 +143,4 @@ def select_type(row):
             return None
         
 if __name__ == '__main__':
-    if not os.path.exists(layout_file):
-        download_layout()
+    pass
